@@ -1,0 +1,25 @@
+import json
+import psycopg2
+from config import credential, redshift_role
+
+def lambda_handler(event,context):
+    conn_string = " dbname = '{}' port='{}' user='{}' password = '{}' host='{}' "\
+        .format(credential['dbname'],credential['port'],credential['user'],credential['password'],credential['host_url'])
+    print(conn_string)
+    con = psycopg2.connect(conn_string)
+    cur = con.cursor()
+    print(con)
+    print('lambda invoked again')
+    bucket = event["Records"][0]["s3"]["bucket"]["name"]
+    file = event["Records"][0]["s3"]["object"]["key"]
+    
+    sql_file = "s3://"+bucket+"/"+file
+    
+    query = """copy public.<your_table_name_in_redshift>
+    from '{0}' iam_role '{1}' delimiter ',' ignoreheader 1 removequotes ; """.format(sql_file, redshift_role['dev'])
+    
+    print(query)
+    cur.execute('truncate table dev.public.<your_table_name_in_redshift>')
+    cur.execute(query)
+    
+    ##create a config.py file with your redshift credentials

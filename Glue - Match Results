@@ -1,0 +1,107 @@
+import boto3
+
+get_last_modified = lambda obj: int(obj['LastModified'].strftime('%s'))
+
+s3 = boto3.client('s3')
+objs = s3.list_objects_v2(Bucket='<input_bucket_name>')['Contents']
+last_added = [obj['Key'] for obj in sorted(objs, key=get_last_modified)][-1]
+
+
+print('all objs', objs)
+print('last added', last_added)
+
+
+import sys
+import boto3
+import pandas as pd
+import numpy as np
+import warnings
+from io import StringIO
+
+warnings.filterwarnings("ignore")
+
+#connecting inot s3
+def s3_connection():
+    session = boto3.Session()
+    s3 = boto3.client('s3')
+    return s3
+
+
+def fetch_data_s3(input_bucket, input_file):
+# bucket name
+    s3 = s3_connection()
+    ### reading csv file into dataframe
+    obj = s3.get_object(Bucket = input_bucket, Key = input_file).get('Body').read().decode('utf-8')
+    data = StringIO(obj)
+    df = pd.read_csv(data)
+    return df
+#calling clean data function
+
+## saving dataframe as csv file in s3
+def load_data_s3(df, output_bucket,output_file):
+    s3 = s3_connection()
+    csv_buffer = StringIO()
+    df.to_csv(csv_buffer, index=False)
+    content = csv_buffer.getvalue()
+    s3_resource = boto3.resource('s3')
+    s3_resource.Object(output_bucket, output_file).put(Body=csv_buffer.getvalue()) # saving csv in s3 bucket
+    return 'Successful'
+ 
+ 
+ 
+ #=============================================
+ ## data cleaning functions
+ 
+ ### Match_Results
+def clean_match_results(df):
+    
+    list_directories = last_added.split('/')
+    df.dropna(axis=0, how='any', inplace=True)
+    df.replace(['N/R','Aban','Canc'], 'No_Result', inplace=True)
+    df.replace('-', 'No Result', inplace=True)
+    df.drop(columns=['Match Date','Match Month','Match Period','Matches'],inplace=True)
+    df = df[['Country','Match','Home/Away','Ground','Match Year','Result','Margin']]
+    df.rename(columns = {'Country':'country','Match':'match','Home/Away':'home_or_away','Ground':'ground','Match Year':'match_year','Result':'result','Margin':'margin'}, inplace = True)
+    if (df['match_year'][0] >= 1801 and df['match_year'][0] <= 1900):
+            df['century'] = '19th'
+    elif(df['match_year'][0] >= 1901 and df['match_year'][0] <= 2000):
+            df['century'] = '20th'
+    elif(df['match_year'][0] >= 2001 and df['match_year'][0] <= 2100):
+            df['century'] = '21st'
+    else:
+            df['century'] = '22nd'
+    df['format'] = list_directories[0]
+    return df
+    
+
+# delete object or file in s3    
+def delete_data_s3(bucket_name,file_name):
+    s3 = s3_connection()
+    s3.delete_object(Bucket = bucket_name, Key = file_name)
+
+# merge data into exisitng csv file
+def merge(df1,df2):
+    
+    df = pd.concat([df1,df2], join='outer')
+    return df
+
+    # Match_Results file transform
+def match_results(input_bucket, input_file, output_bucket, output_file):
+    s3 = s3_connection()
+    df = fetch_data_s3(input_bucket,input_file)
+    print('fetched this data from input bucket', df)
+    df = clean_match_results(df)
+    print('after cleaning fetched data from input bucket', df)
+    df1 = fetch_data_s3(output_bucket,output_file)
+    
+    print('fetched this from output bucket', df1)
+    delete_data_s3(output_bucket, output_file)
+    print('deleted previous file in output bucket')
+    base_df = merge(df1,df)
+    print('merged cleaned data from input to previously cleaned data from output', base_df)
+    load_data_s3(base_df,output_bucket,output_file)
+    print('full old+new cleaned data loaded back to output bucket ')
+    
+    return 'Success'
+
+match_results('<input_bucket_name>', last_added,'<output_bucket_name>', '<output_file_name.csv>')

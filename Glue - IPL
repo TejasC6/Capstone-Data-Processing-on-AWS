@@ -1,0 +1,105 @@
+import boto3
+
+get_last_modified = lambda obj: int(obj['LastModified'].strftime('%s'))
+
+s3 = boto3.client('s3')
+objs = s3.list_objects_v2(Bucket='<input_bucket_name>')['Contents']
+last_added = [obj['Key'] for obj in sorted(objs, key=get_last_modified)][-1]
+
+
+print('all objs', objs)
+print('last added', last_added)
+
+
+import sys
+import boto3
+import pandas as pd
+import numpy as np
+import warnings
+from io import StringIO
+
+warnings.filterwarnings("ignore")
+
+#connecting inot s3
+def s3_connection():
+    session = boto3.Session()
+    s3 = boto3.client('s3')
+    return s3
+
+def fetch_data_s3(input_bucket,input_file):
+# bucket name
+    s3 = s3_connection()
+    ### reading csv file into dataframe
+    obj = s3.get_object(Bucket = input_bucket, Key = input_file).get('Body').read().decode('utf-8')
+    data = StringIO(obj)
+    df = pd.read_csv(data)
+    return df
+#calling clean data function
+
+## saving dataframe as csv file in s3
+def load_data_s3(df, output_bucket,output_file):
+    s3 = s3_connection()
+    csv_buffer = StringIO()
+    df.to_csv(csv_buffer, index=False)
+    content = csv_buffer.getvalue()
+    s3_resource = boto3.resource('s3')
+    s3_resource.Object(output_bucket, output_file).put(Body=csv_buffer.getvalue()) # saving csv in s3 bucket
+    return 'Successful'
+ 
+ 
+ 
+ #=============================================
+ ## data cleaning functions
+ 
+ ### IPL
+def clean_ipl(df):
+    def star_func_2(data):
+        if pd.isna(data):
+            return data
+        elif '*' in data:
+            return 'Not Out'
+        else:
+            return 'Out'
+    df.replace('-', np.nan, inplace=True)
+    df.replcae('Rising Pune Supergiant', 'Rising Pune Supergiants', inplace = True)
+    df['Highest Score Num'] = df['Highest Score'].str.replace('*', '')
+    df['Highest_Score_o/n'] = df['Highest Score'].apply(star_func_2)
+    df.drop(columns=['Highest Score'])
+    df['Best Bowling Figures'] = df['Best Bowling Figures'].apply(lambda n:n.replace('/',' for ') if type(n)==str else n)
+    df = df[['Team','Player','Tournament','Matches','Batting Innings','Not Out','Runds Scored','Highest Score Num','Highest_Score_o/n','Batting Average','Balls Faced','Batting Strike Rate','100','50','0','4s','6s','Bowling Innings','Overs Bowled','Maidens Bowled','Runs Conceded','Wickets Taken','Best Bowling Figures','Bowling Average','Bowling Economy Rate','Bowling Strike Rate','4+ Innings Wickets','5+ Innings Wickets','Catches Taken','Stumpings Made']]
+    
+    df = df.rename(columns={'Team':'team','Player':'player','Tournament':'tournament','Matches':'matches','Batting Innings':'batting_innings','Not Out':'not_out','Runds Scored':'runs_scored','Highest Score Num':'highest_score_num','Highest_Score_o/n':'highest_score_out_or_not','Batting Average':'batting_average','Balls Faced':'balls_faced','Batting Strike Rate':'batting_strike_rate','100':'hundreds','50':'fifties','0':'ducks','4s':'fours','6s':'sixes','Bowling Innings':'bowling_innings','Overs Bowled':'overs_bowled','Maidens Bowled':'maidens_bowled','Runs Conceded':'runs_conceded','Wickets Taken':'wickets_taken','Best Bowling Figures':'best_bowling_figures','Bowling Average':'bowling_average','Bowling Economy Rate':'bowling_economy_rate','Bowling Strike Rate':'bowling_strike_rate','4+ Innings Wickets':'four_wicket_hauls','5+ Innings Wickets':'five_wicket_hauls','Catches Taken':'catches_taken','Stumpings Made':'stumpings_made'})
+    return df
+ 
+
+# delete object or file in s3    
+def delete_data_s3(bucket_name,file_name):
+    s3 = s3_connection()
+    s3.delete_object(Bucket = bucket_name, Key = file_name)
+
+# merge data into exisitng csv file
+def merge(df1,df2):
+    frames = [df1,df2]
+    df = pd.concat(frames)
+    return df
+
+# IPL file transform
+def transform_ipl(input_bucket, input_file, output_bucket, output_file):
+    s3 = s3_connection()
+    df = fetch_data_s3(input_bucket,input_file)
+    print('fetched this data from input bucket', df)
+    df = clean_ipl(df)
+    print('after cleaning fetched data from input bucket', df)
+    df1 = fetch_data_s3(output_bucket,output_file)
+    print('fetched this from output bucket', df1)
+    delete_data_s3(output_bucket, output_file)
+    print('deleted previous file in output bucket')
+    base_df = merge(df1,df)
+    print('merged cleaned data from input to previously cleaned data from output', base_df)
+    load_data_s3(base_df,output_bucket,output_file)
+    print('full old+new cleaned data loaded back to output bucket ')
+    
+    return 'Success'
+
+transform_ipl('<input_bucket_name>', last_added,'<outpt_bucket_name>', 'output_file_name.csv')
+
